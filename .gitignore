@@ -1,0 +1,8 @@
+# .env 
+.env
+
+# Node modules
+node_modules/
+
+#certificates
+certs/
