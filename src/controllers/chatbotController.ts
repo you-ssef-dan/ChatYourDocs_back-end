@@ -1,4 +1,5 @@
 // src/controllers/chatbotController.ts
+
 import { Request, Response } from 'express';
 import * as chatbotService from '../services/chatbotService';
 import axios from 'axios';
@@ -34,20 +35,24 @@ export async function createChatbot(req: Request, res: Response) {
     });
 
     const files = (req.files as MulterFile[]) || [];
+
+    // 2) Upload files to S3 safely
     for (const f of files) {
-      // normalize filename to avoid weird chars in key
-      const safeName = f.originalname.replace(/\s+/g, '_');
       const key = `users/user${user.uid}/chatbot${createdChatbot.id}/documents/${f.originalname}`;
-      await uploadFileToS3(key, f.buffer, f.mimetype);
-      uploadedS3Keys.push(key);
+      try {
+        await uploadFileToS3(key, f.buffer, f.mimetype);
+        uploadedS3Keys.push(key); // track only successful uploads
+      } catch (s3Err) {
+        console.error(`Failed to upload ${f.originalname} to S3`, s3Err);
+        throw new Error(`S3 upload failed for file: ${f.originalname}`);
+      }
     }
 
-    // 3) Prepare form-data with buffers to send to Python (keeps your existing behavior)
+    // 3) Send files to Python service
     const form = new FormData();
     form.append('name', name);
     form.append('chatbot_id', String(createdChatbot.id));
-
-    for (const f of (req.files as MulterFile[]) || []) {
+    for (const f of files) {
       form.append('files', f.buffer, {
         filename: f.originalname,
         contentType: f.mimetype,
@@ -55,43 +60,57 @@ export async function createChatbot(req: Request, res: Response) {
       } as any);
     }
 
-    // 4) Send to Python service
     const pythonUrl = process.env.PYTHON_SERVICE_URL
       ? `${process.env.PYTHON_SERVICE_URL.replace(/\/$/, '')}/chatbots`
       : 'http://localhost:8000/chatbots';
 
-    const headers = {
-      ...form.getHeaders(),
-      'X-User-Id': String(user.uid), // Python expects X-User-Id header
-    };
+    const headers = { ...form.getHeaders(), 'X-User-Id': String(user.uid) };
 
-    const pythonResp = await axios.post(pythonUrl, form, {
-      headers
-    });
-
-    // 5) Respond with combined result (no S3 metadata stored in DB)
-    return res.json({
-      message: 'Chatbot created',
-      chatbot: createdChatbot,
-      python: pythonResp.data,
-    });
-
-  } catch (err: any) {
-    console.error('createChatbot failed:', err?.message ?? err);
-
-    // Attempt cleanup:
-    //  - delete uploaded S3 files (if any)
-    //  - delete DB record (if created)
     try {
+      const pythonResp = await axios.post(pythonUrl, form, { headers });
+      if (pythonResp.status < 200 || pythonResp.status >= 300) {
+        throw new Error(`Python service returned status ${pythonResp.status}`);
+      }
+    } catch (pythonErr: any) {
+      console.error('Python service call failed:', pythonErr);
+
+      // Rollback: delete uploaded S3 files and DB record
       if (uploadedS3Keys.length > 0) {
         try {
           await deleteFilesFromS3(uploadedS3Keys);
-          console.info(`Deleted ${uploadedS3Keys.length} uploaded S3 objects due to failure.`);
+          console.info(`Rolled back ${uploadedS3Keys.length} S3 files`);
         } catch (s3DelErr) {
           console.error('Failed to delete S3 objects during rollback:', s3DelErr);
         }
       }
 
+      if (createdChatbot?.id) {
+        try {
+          await chatbotService.deleteChatbot(createdChatbot.id);
+          console.info(`Rolled back chatbot id=${createdChatbot.id}`);
+        } catch (dbDelErr) {
+          console.error('Failed to delete chatbot during rollback:', dbDelErr);
+        }
+      }
+
+      return res.status(500).json({ error: 'Failed to create chatbot', detail: pythonErr?.message });
+    }
+
+    // 4) Success response
+    return res.json({
+      message: 'Chatbot created',
+      chatbot: createdChatbot,
+    });
+
+  } catch (err: any) {
+    console.error('createChatbot failed:', err?.message ?? err);
+
+    // Rollback any partial success (S3 uploads / DB record)
+    try {
+      if (uploadedS3Keys.length > 0) {
+        await deleteFilesFromS3(uploadedS3Keys);
+        console.info(`Rolled back ${uploadedS3Keys.length} S3 files`);
+      }
       if (createdChatbot?.id) {
         await chatbotService.deleteChatbot(createdChatbot.id);
         console.info(`Rolled back chatbot id=${createdChatbot.id}`);
@@ -100,9 +119,7 @@ export async function createChatbot(req: Request, res: Response) {
       console.error('Rollback failed:', rollbackErr);
     }
 
-    // Return an error to client. Include Python response body if available.
-    const pythonMessage = err?.response?.data || err?.message;
-    return res.status(500).json({ error: 'Failed to create chatbot', detail: pythonMessage });
+    return res.status(500).json({ error: 'Failed to create chatbot', detail: err?.message });
   }
 }
 
