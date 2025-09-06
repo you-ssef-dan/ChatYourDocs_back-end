@@ -13,13 +13,17 @@ enum Role {
 }
 
 model User {
-  id        Int       @id @default(autoincrement())
-  username  String            // no longer unique
-  email     String    @unique
-  password  String
-  roles     Role[]
-  chatbots  Chatbot[] // relation
+  id               Int       @id @default(autoincrement())
+  email            String    @unique
+  password         String
+  role             String    @default("USER")
+  emailVerified    Boolean   @default(false)
+  resetToken       String?   @db.VarChar(255)
+  resetTokenExpiry DateTime?
+  createdAt        DateTime  @default(now())
+  updatedAt        DateTime  @updatedAt
 }
+
 
 model Chatbot {
   id        Int      @id @default(autoincrement())

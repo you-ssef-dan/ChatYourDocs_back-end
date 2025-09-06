@@ -4,7 +4,7 @@ import { verifyJwt } from '../config/jwt';
 import prisma from '../config/database';
 
 export interface AuthRequest extends Request {
-  user?: { uid: number; username: string; scope?: string };
+  user?: { uid: number; username: string; email: string; scope?: string };
 }
 
 export async function authenticateToken(req: AuthRequest, res: Response, next: NextFunction) {
@@ -28,6 +28,7 @@ export async function authenticateToken(req: AuthRequest, res: Response, next: N
     req.user = {
       uid: payload.uid,
       username: payload.sub,
+      email: payload.email,
       scope: payload.scope,
     };
 
