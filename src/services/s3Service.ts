@@ -4,6 +4,7 @@ import {
   PutObjectCommand,
   DeleteObjectsCommand,
   GetBucketLocationCommand,
+  ListObjectsV2Command, // <-- new
 } from "@aws-sdk/client-s3";
 import dotenv from "dotenv";
 
@@ -88,4 +89,45 @@ export async function deleteFilesFromS3(keys: string[]): Promise<void> {
       })
     );
   }
+}
+
+// ----------------- NEW helpers -----------------
+
+// Return array of object keys for prefix (handles pagination)
+export async function listKeysWithPrefix(prefix: string): Promise<string[]> {
+  await ensureClientMatchesBucketRegion();
+
+  const keys: string[] = [];
+  let continuationToken: string | undefined = undefined;
+
+  while (true) {
+    const resp = await s3Client.send(
+      new ListObjectsV2Command({
+        Bucket: BUCKET,
+        Prefix: prefix,
+        ContinuationToken: continuationToken,
+      })
+    );
+
+    const contents = resp.Contents ?? [];
+    for (const c of contents) {
+      if (c.Key) keys.push(c.Key);
+    }
+
+    if (!resp.IsTruncated) break;
+    continuationToken = resp.NextContinuationToken as string | undefined;
+    if (!continuationToken) break;
+  }
+
+  return keys;
+}
+
+// Delete all objects under a prefix (e.g. users/user123/chatbot456/...)
+export async function deleteFolderFromS3(prefix: string): Promise<void> {
+  const keys = await listKeysWithPrefix(prefix);
+  if (keys.length === 0) {
+    console.info(`No S3 objects found for prefix "${prefix}"`);
+    return;
+  }
+  await deleteFilesFromS3(keys);
 }

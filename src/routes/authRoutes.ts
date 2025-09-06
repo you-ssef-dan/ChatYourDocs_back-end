@@ -14,6 +14,7 @@ router.post('/addUser', authenticateToken, requireRole('ADMIN'), controller.addU
 router.get('/public', controller.publicEndpoint);
 router.get('/user', authenticateToken, requireRole('USER'), controller.userEndpoint);
 router.get('/users', authenticateToken, requireRole('ADMIN'), controller.listUsers);
+router.delete('/users/delete/:id', authenticateToken, requireRole('ADMIN'), controller.deleteUser);
 
 
 export default router;

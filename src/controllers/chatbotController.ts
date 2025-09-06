@@ -4,7 +4,7 @@ import { Request, Response } from 'express';
 import * as chatbotService from '../services/chatbotService';
 import axios from 'axios';
 import FormData from 'form-data';
-import { uploadFileToS3, deleteFilesFromS3 } from '../services/s3Service';
+import { uploadFileToS3, deleteFilesFromS3, deleteFolderFromS3} from '../services/s3Service';
 
 // Define MulterFile type for better type safety
 type MulterFile = {
@@ -33,10 +33,12 @@ export async function createChatbot(req: Request, res: Response) {
       name,
       userId: user.uid,
     });
+    console.log(`Created chatbot id=${createdChatbot.id} in DB`);
 
     const files = (req.files as MulterFile[]) || [];
 
     // 2) Upload files to S3 safely
+    console.log(`Uploading ${files.length} files to S3`);
     for (const f of files) {
       const key = `users/user${user.uid}/chatbot${createdChatbot.id}/documents/${f.originalname}`;
       try {
@@ -47,8 +49,10 @@ export async function createChatbot(req: Request, res: Response) {
         throw new Error(`S3 upload failed for file: ${f.originalname}`);
       }
     }
+    console.log(`Uploaded ${uploadedS3Keys.length} files to S3`);
 
     // 3) Send files to Python service
+    console.log('Calling Python service to process files');
     const form = new FormData();
     form.append('name', name);
     form.append('chatbot_id', String(createdChatbot.id));
@@ -67,7 +71,9 @@ export async function createChatbot(req: Request, res: Response) {
     const headers = { ...form.getHeaders(), 'X-User-Id': String(user.uid) };
 
     try {
+      console.log(`Sending request to Python service at ${pythonUrl}`);
       const pythonResp = await axios.post(pythonUrl, form, { headers });
+      console.log('Python service response status:', pythonResp.status);
       if (pythonResp.status < 200 || pythonResp.status >= 300) {
         throw new Error(`Python service returned status ${pythonResp.status}`);
       }
@@ -136,12 +142,33 @@ export async function listUserChatbots(req: Request, res: Response) {
 export async function deleteChatbot(req: Request, res: Response) {
   try {
     const { id } = req.params;
-    await chatbotService.deleteChatbot(Number(id));
-    return res.json({ message: 'Chatbot deleted' });
+    const user = (req as any).user;
+
+    if (!user?.uid) {
+      return res.status(401).json({ error: 'Unauthorized' });
+    }
+
+    const chatbotId = Number(id);
+    if (Number.isNaN(chatbotId)) {
+      return res.status(400).json({ error: 'Invalid chatbot id' });
+    }
+
+    try {
+      // centralized deletion (S3 -> Python -> DB)
+      await chatbotService.deleteChatbotCompletely(chatbotId, user.uid);
+    } catch (err: any) {
+      console.error('Failed to completely delete chatbot:', err);
+      return res.status(500).json({ error: err?.message ?? 'Failed to delete chatbot' });
+    }
+
+    return res.json({ message: 'Chatbot and its files deleted' });
   } catch (err: any) {
-    return res.status(500).json({ error: err.message });
+    console.error('deleteChatbot failed:', err?.message ?? err);
+    return res.status(500).json({ error: err?.message ?? 'Failed to delete chatbot' });
   }
 }
+
+
 
 export async function getChatbotById(req: Request, res: Response) {
   try {

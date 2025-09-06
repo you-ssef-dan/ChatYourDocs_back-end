@@ -49,6 +49,15 @@ return res.status(500).json({ error: err.message });
 }
 }
 
+export async function deleteUser(req: Request, res: Response) {
+try {
+const { id } = req.params;
+await userService.deleteUser(Number(id));
+return res.json({ message: 'User deleted successfully' });
+} catch (err: any) {
+return res.status(500).json({ error: err.message });
+}
+}
 
 export async function publicEndpoint(req: Request, res: Response) {
 return res.json({ message: 'Hello from public endpoint' });
