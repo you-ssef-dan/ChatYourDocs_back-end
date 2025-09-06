@@ -16,8 +16,8 @@ let server: http.Server | null = null;
 
 async function createDefaultAdmin() {
   try {
-    await registerUser({ username: 'admin', password: '12345', role: 'ADMIN' });
-    console.log('✅ Default admin user created: admin / 12345');
+    await registerUser({ username: 'admin',email : 'admin@gmail.com',  password: '12345', role: 'ADMIN' });
+    console.log('✅ Default admin user created: admin@gmail.com / 12345');
   } catch (err: any) {
     // If the user exists or any expected error happens, log info and continue.
     console.log('ℹ️ Admin user creation skipped: ' + (err?.message ?? String(err)));
